@@ -1,22 +1,25 @@
-import io.swagger.v3.oas.models.OpenAPI;
-import io.swagger.v3.oas.models.Operation;
-import io.swagger.v3.oas.models.PathItem;
-import io.swagger.v3.oas.models.media.MediaType;
-import io.swagger.v3.oas.models.media.Schema;
-import io.swagger.v3.oas.models.responses.ApiResponse;
-import io.swagger.v3.parser.OpenAPIV3Parser;
 import com.atlassian.oai.validator.model.Request;
 import com.atlassian.oai.validator.model.Response;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.swagger.v3.oas.models.OpenAPI;
+import io.swagger.v3.oas.models.media.MediaType;
+import io.swagger.v3.oas.models.media.Schema;
+import io.swagger.v3.oas.models.Operation;
+import io.swagger.v3.oas.models.PathItem;
+import io.swagger.v3.parser.OpenAPIV3Parser;
 
 public class SchemaExtractor {
     private static final ObjectMapper mapper = new ObjectMapper();
     private static OpenAPI openAPI;
 
-    public static void init(String openApiSpecPath) {
-        openAPI = new OpenAPIV3Parser().read(openApiSpecPath);
+    public static void init(OpenAPI spec) {
+        openAPI = spec;
+    }
+
+    public static void init(String specPath) {
+        openAPI = new OpenAPIV3Parser().read(specPath);
         if (openAPI == null) {
-            throw new IllegalStateException("Failed to load OpenAPI spec from: " + openApiSpecPath);
+            throw new IllegalStateException("Failed to load OpenAPI spec from: " + specPath);
         }
     }
 
@@ -27,25 +30,34 @@ public class SchemaExtractor {
 
         String path = request.getPath();
         String method = request.getMethod().toLowerCase();
-        int status = response.getStatus();
+        String status = String.valueOf(response.getStatus());
 
         PathItem pathItem = openAPI.getPaths().get(path);
-        if (pathItem == null) return null;
+        if (pathItem == null) {
+            return null;
+        }
 
         Operation operation = getOperation(pathItem, method);
-        if (operation == null) return null;
+        if (operation == null || operation.getResponses() == null) {
+            return null;
+        }
 
-        ApiResponse apiResponse = operation.getResponses().get(String.valueOf(status));
-        if (apiResponse == null || apiResponse.getContent() == null) return null;
+        io.swagger.v3.oas.models.responses.ApiResponse apiResponse = operation.getResponses().get(status);
+        if (apiResponse == null || apiResponse.getContent() == null) {
+            return null;
+        }
 
-        // Assume JSON response for now
         MediaType mediaType = apiResponse.getContent().get("application/json");
-        if (mediaType == null) return null;
+        if (mediaType == null) {
+            // possibly support other types
+            return null;
+        }
 
         Schema<?> schema = mediaType.getSchema();
-        if (schema == null) return null;
+        if (schema == null) {
+            return null;
+        }
 
-        // Convert schema object to JSON string (for networknt validator)
         return mapper.writeValueAsString(schema);
     }
 

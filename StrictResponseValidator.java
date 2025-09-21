@@ -1,5 +1,5 @@
 import com.atlassian.oai.validator.OpenApiInteractionValidator;
-import com.atlassian.oai.validator.interaction.response.ResponseValidator;
+import com.atlassian.oai.validator.interaction.response.ResponseValidator;  // Atlassian class
 import com.atlassian.oai.validator.model.Request;
 import com.atlassian.oai.validator.model.Response;
 import com.atlassian.oai.validator.report.ValidationReport;
@@ -9,53 +9,65 @@ import com.networknt.schema.JsonSchema;
 import com.networknt.schema.JsonSchemaFactory;
 import com.networknt.schema.SpecVersion;
 import com.networknt.schema.ValidationMessage;
+import io.swagger.v3.oas.models.OpenAPI;
 
 import java.util.Set;
 
-public class StrictResponseValidator implements ResponseValidator {
+public class StrictResponseValidator {
 
-    private final OpenApiInteractionValidator delegate;
+    private final ResponseValidator delegate;
     private final ObjectMapper mapper = new ObjectMapper();
     private final JsonSchemaFactory schemaFactory =
             JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V201909);
 
-    public StrictResponseValidator(OpenApiInteractionValidator delegate) {
-        this.delegate = delegate;
+    public StrictResponseValidator(OpenApiInteractionValidator interactionValidator, OpenAPI openApiSpec) {
+        // Assumes Atlassian’s ResponseValidator has a constructor which takes OpenApiInteractionValidator and possibly the spec
+        // Or if it's accessible via factory methods — adjust accordingly.
+        this.delegate = new ResponseValidator(interactionValidator);
+        SchemaExtractor.init(openApiSpec);
     }
 
-    @Override
-    public ValidationReport validateResponse(final Response response, final Request request) {
-        // 1. Run Atlassian validator first (contract-level checks)
-        ValidationReport report = delegate.validateResponse(request.getPath(), request.getMethod(), response);
-
+    /**
+     * Strict validation combining Atlassian’s and JSON Schema.
+     */
+    public ValidationReport validate(Response response, Request request) {
+        // 1. Use Atlassian’s validation first
+        ValidationReport report = delegate.validate(response, request);
         if (report.hasErrors()) {
-            return report; // stop early if contract already invalid
+            return report;
         }
 
-        // 2. Run strict JSON Schema validation
+        // 2. Strict schema-level validation
         try {
             String schemaJson = SchemaExtractor.extractSchemaForResponse(request, response);
-
             if (schemaJson != null && response.getBody().isPresent()) {
                 JsonNode bodyNode = mapper.readTree(response.getBody().get());
                 JsonSchema schema = schemaFactory.getSchema(schemaJson);
-
                 Set<ValidationMessage> errors = schema.validate(bodyNode);
+
                 if (!errors.isEmpty()) {
+                    // Build a new report that includes schema errors
                     ValidationReport.Builder builder = ValidationReport.from(report);
-                    errors.forEach(e -> builder.addMessage(
-                            ValidationReport.Message.create("schema", e.getMessage())
-                    ));
+                    for (ValidationMessage err : errors) {
+                        builder.addMessage(
+                            ValidationReport.Message.create("schema", err.getMessage())
+                        );
+                    }
                     return builder.build();
                 }
             }
         } catch (Exception e) {
             ValidationReport.Builder builder = ValidationReport.from(report);
-            builder.addMessage(ValidationReport.Message.create("schema",
-                    "Schema validation error: " + e.getMessage()));
+            builder.addMessage(
+                ValidationReport.Message.create(
+                    "schema",
+                    "Error during strict schema validation: " + e.getMessage()
+                )
+            );
             return builder.build();
         }
 
-        return report; // fully valid
+        // All good
+        return report;
     }
 }
