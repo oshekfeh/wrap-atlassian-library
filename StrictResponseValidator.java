@@ -1,8 +1,8 @@
+import com.atlassian.oai.validator.OpenApiInteractionValidator;
 import com.atlassian.oai.validator.interaction.response.ResponseValidator;
 import com.atlassian.oai.validator.model.Request;
 import com.atlassian.oai.validator.model.Response;
 import com.atlassian.oai.validator.report.ValidationReport;
-import com.atlassian.oai.validator.OpenApiInteractionValidator;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.networknt.schema.JsonSchema;
@@ -25,33 +25,37 @@ public class StrictResponseValidator implements ResponseValidator {
 
     @Override
     public ValidationReport validateResponse(final Response response, final Request request) {
-        // 1. Use Atlassian’s built-in validator
+        // 1. Run Atlassian validator first (contract-level checks)
         ValidationReport report = delegate.validateResponse(request.getPath(), request.getMethod(), response);
 
         if (report.hasErrors()) {
-            return report; // stop early if high-level validation already failed
+            return report; // stop early if contract already invalid
         }
 
-        // 2. Get schema JSON for this response (status + content type) from the OpenAPI spec
+        // 2. Run strict JSON Schema validation
         try {
-            String schemaJson = SchemaExtractor.extractSchemaForResponse(delegate, request, response);
-            if (schemaJson != null) {
-                JsonNode bodyNode = mapper.readTree(response.getBody().orElse("{}"));
+            String schemaJson = SchemaExtractor.extractSchemaForResponse(request, response);
+
+            if (schemaJson != null && response.getBody().isPresent()) {
+                JsonNode bodyNode = mapper.readTree(response.getBody().get());
                 JsonSchema schema = schemaFactory.getSchema(schemaJson);
 
                 Set<ValidationMessage> errors = schema.validate(bodyNode);
                 if (!errors.isEmpty()) {
                     ValidationReport.Builder builder = ValidationReport.from(report);
-                    errors.forEach(e -> builder.addMessage(ValidationReport.Message.create("schema", e.getMessage())));
+                    errors.forEach(e -> builder.addMessage(
+                            ValidationReport.Message.create("schema", e.getMessage())
+                    ));
                     return builder.build();
                 }
             }
         } catch (Exception e) {
             ValidationReport.Builder builder = ValidationReport.from(report);
-            builder.addMessage(ValidationReport.Message.create("schema", "Schema validation error: " + e.getMessage()));
+            builder.addMessage(ValidationReport.Message.create("schema",
+                    "Schema validation error: " + e.getMessage()));
             return builder.build();
         }
 
-        return report;
+        return report; // fully valid
     }
 }
